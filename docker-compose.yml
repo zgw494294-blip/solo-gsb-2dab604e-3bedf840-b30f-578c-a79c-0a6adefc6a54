@@ -1,0 +1,12 @@
+services:
+  web:
+    build: .
+    ports:
+      - "8000:8000"
+    restart: unless-stopped
+    volumes:
+      # SQLite 数据库（批次/核销数据）挂载到持久卷，容器重建后数据保留。
+      - batch_data:/app/data
+
+volumes:
+  batch_data:

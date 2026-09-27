@@ -1,0 +1,264 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>木料定尺裁切 · 全局最优排料与锯机排程</title>
+  <link rel="stylesheet" href="/static/style.css" />
+</head>
+<body>
+  <div class="page">
+    <header class="site-header">
+      <h1>木料定尺裁切</h1>
+      <p class="subtitle">输入原板与零件规格，求覆盖全部零件的全局最优方案；支持单份清单精确排料、锯机作业排程、多订单合板费用分摊与裁切执行核销。</p>
+    </header>
+
+    <main class="layout">
+      <!-- 输入区 -->
+      <section class="card form-card">
+        <div class="mode-tabs" role="tablist">
+          <button type="button" id="tabSingle" class="tab active">单份清单</button>
+          <button type="button" id="tabSchedule" class="tab">锯机排程</button>
+          <button type="button" id="tabMulti" class="tab">多订单分摊</button>
+          <button type="button" id="tabBatch" class="tab">执行核销</button>
+        </div>
+
+        <h2>原板信息</h2>
+        <div class="field-grid">
+          <label class="field">
+            <span>原板长度</span>
+            <input type="number" id="boardLength" min="1" step="1" value="6000" inputmode="numeric" />
+          </label>
+          <label class="field">
+            <span>原板单价（元）</span>
+            <input type="number" id="unitPrice" min="1" step="1" value="120" inputmode="numeric" />
+          </label>
+          <label class="field">
+            <span>可用数量（根）</span>
+            <input type="number" id="available" min="1" step="1" value="10" inputmode="numeric" />
+          </label>
+          <label class="field">
+            <span>锯缝宽度</span>
+            <input type="number" id="kerf" min="0" step="1" value="3" inputmode="numeric" />
+          </label>
+        </div>
+
+        <!-- 单份清单 / 锯机排程共用的零件清单 -->
+        <div id="partsSection">
+          <div class="parts-head">
+            <h2>所需零件</h2>
+            <button type="button" id="addPart" class="btn btn-ghost">＋ 添加零件</button>
+          </div>
+          <div class="parts-table">
+            <div class="parts-row parts-title-row">
+              <span>序号</span><span>零件长度</span><span>件数</span><span>操作</span>
+            </div>
+            <div id="partRows"></div>
+          </div>
+          <p class="hint">长度、单价、数量须为正整数；锯缝宽度为非负整数；需求总件数不超过 12 件。</p>
+        </div>
+
+        <!-- 单份清单模式 -->
+        <div id="singleMode">
+          <button type="button" id="solveBtn" class="btn btn-primary">计算最优方案</button>
+        </div>
+
+        <!-- 锯机排程模式 -->
+        <div id="scheduleMode" hidden>
+          <h2 class="block-title">锯机排程</h2>
+          <div class="field-grid field-grid-single">
+            <label class="field">
+              <span>每板准备分钟</span>
+              <input type="number" id="setupMinutes" min="0" step="1" value="10" inputmode="numeric" />
+            </label>
+          </div>
+          <div class="parts-head">
+            <h2>锯机列表</h2>
+            <button type="button" id="addMachine" class="btn btn-ghost">＋ 添加锯机</button>
+          </div>
+          <div class="parts-table machine-table">
+            <div class="parts-row parts-title-row machine-title-row">
+              <span>机台</span><span>最早可用分钟</span><span>每件切割分钟</span><span>操作</span>
+            </div>
+            <div id="machineRows"></div>
+          </div>
+          <p class="hint">2～4 台锯机，机台按录入顺序从 1 编号；最早可用分钟为非负整数，每件切割分钟为正整数。每块原板耗时＝准备分钟＋本板切件数×每件切割分钟。</p>
+
+          <button type="button" id="scheduleBtn" class="btn btn-primary">计算最优排程</button>
+        </div>
+
+        <!-- 多订单分摊模式 -->
+        <div id="multiMode" hidden>
+          <div class="parts-head">
+            <h2>订单列表</h2>
+            <button type="button" id="addOrder" class="btn btn-ghost">＋ 添加订单</button>
+          </div>
+          <div id="orderList"></div>
+          <p class="hint">2～4 个订单，每个订单需填写名称与至少一种零件；全部订单合计不超过 12 件。按 Shapley 值分摊合板最优总价。</p>
+
+          <button type="button" id="allocBtn" class="btn btn-primary">计算费用分摊</button>
+        </div>
+
+        <!-- 执行核销模式 -->
+        <div id="batchMode" hidden>
+          <button type="button" id="createBatchBtn" class="btn btn-primary">求解并创建核销批次</button>
+          <p class="hint">用上方原板信息与零件清单在服务端求解；可行时冻结为核销批次（版本 0，各板待加工），无解不建批次。</p>
+
+          <h2 class="block-title">按 ID 打开批次</h2>
+          <div class="open-batch-row">
+            <input type="number" id="openBatchId" min="1" step="1" placeholder="批次 ID" inputmode="numeric" />
+            <button type="button" id="openBatchBtn" class="btn btn-ghost">打开批次</button>
+          </div>
+          <p class="hint">打开已冻结的批次后，可在右侧逐板提交核销结果（合格 / 报废）。</p>
+        </div>
+
+        <div id="formError" class="alert alert-error" role="alert" hidden></div>
+      </section>
+
+      <!-- 结果区 -->
+      <section class="card result-card">
+        <h2 id="resultTitle">裁切方案</h2>
+        <div id="resultPlaceholder" class="placeholder">填写左侧信息后点击「计算最优方案」，这里会列出逐板切件、锯缝、余料与合计价格。</div>
+
+        <div id="result" hidden>
+          <div id="summary" class="summary-grid"></div>
+          <div id="boardList" class="board-list"></div>
+        </div>
+
+        <div id="scheduleResult" hidden>
+          <div id="scheduleSummary" class="summary-grid"></div>
+
+          <h3 class="section-title">原板加工顺序</h3>
+          <div id="machineList" class="machine-list"></div>
+          <div id="scheduleTotal" class="total-row"></div>
+
+          <h3 class="section-title">排料方案</h3>
+          <div id="scheduleBoardList" class="board-list compact"></div>
+        </div>
+
+        <div id="allocResult" hidden>
+          <div id="allocSummary" class="summary-grid"></div>
+          <table class="alloc-table">
+            <thead>
+              <tr><th>订单</th><th>精确分摊值</th><th class="pay">最终应付</th></tr>
+            </thead>
+            <tbody id="allocRows"></tbody>
+            <tfoot>
+              <tr>
+                <td>合计</td>
+                <td id="allocTotalExact"></td>
+                <td class="pay" id="allocTotalPay"></td>
+              </tr>
+            </tfoot>
+          </table>
+          <p class="hint">分摊规则：Shapley 值（所有订单加入次序的平均边际费用），按有理数精确计算后换算为分；先逐单向下取整，剩余按小数余数降序补足（同余按录入顺序），各单应付之和等于合板最优总价。</p>
+        </div>
+
+        <div id="batchResult" hidden>
+          <div id="batchSummary" class="summary-grid"></div>
+
+          <h3 class="section-title">各长度合格件数</h3>
+          <div id="qualifiedList" class="qualified-list"></div>
+
+          <h3 class="section-title">逐板状态</h3>
+          <div id="batchBoardList" class="board-list compact"></div>
+
+          <div id="reportSection">
+            <h3 class="section-title">提交核销</h3>
+            <p class="hint">为待加工板选择「合格」或「报废」，未选择的板保持待加工；提交成功后版本加一。同一幂等键同一载荷的重试会直接返回首次响应（忽略期望版本），结果顺序不影响载荷比较。</p>
+            <div class="field-grid">
+              <label class="field">
+                <span>幂等键（非空）</span>
+                <input type="text" id="idemKey" maxlength="80" />
+              </label>
+              <label class="field">
+                <span>期望版本</span>
+                <input type="number" id="expectedVersion" min="0" step="1" inputmode="numeric" />
+              </label>
+            </div>
+            <button type="button" id="reportBtn" class="btn btn-primary">提交核销结果</button>
+          </div>
+          <div id="batchDone" class="alert alert-warn" hidden>全部原板均已核销，本批次无需再提交。</div>
+
+          <div id="qualitySection" hidden>
+            <h3 class="section-title">实测尺寸复核</h3>
+            <p class="hint">仅可填写已核销为「合格」原板的切件实测长度（正整数），未填写的切件不参与本次复核。公差为非负整数；实测件只能分给长度差绝对值不超过公差的需求件，每件需求至多使用一次。该复核为只读预览，不会修改批次。</p>
+            <div class="field-grid field-grid-single">
+              <label class="field">
+                <span>公差（非负整数）</span>
+                <input type="number" id="qualityTolerance" min="0" step="1" value="0" inputmode="numeric" />
+              </label>
+            </div>
+            <button type="button" id="qualityBtn" class="btn btn-primary">执行实测复核</button>
+            <div id="qualityError" class="alert alert-error" role="alert" hidden></div>
+            <div id="qualityResult" hidden>
+              <div id="qualitySummary" class="summary-grid"></div>
+
+              <h4 class="subsection-title">需求件编号（按录入顺序展开）</h4>
+              <div id="qualityDemandList" class="qualified-list"></div>
+
+              <h4 class="subsection-title">逐件去向</h4>
+              <table class="job-table quality-table">
+                <thead>
+                  <tr><th>原板</th><th>切件</th><th>计划长度</th><th>实测长度</th><th>去向</th><th>偏差</th></tr>
+                </thead>
+                <tbody id="qualityRows"></tbody>
+              </table>
+
+              <h4 class="subsection-title">未分配实测件</h4>
+              <div id="qualityUnassigned" class="qualified-list"></div>
+
+              <h4 class="subsection-title">各需求长度缺件数</h4>
+              <div id="qualityShortage" class="qualified-list"></div>
+            </div>
+          </div>
+
+          <div id="jointSection" hidden>
+            <h3 class="section-title">合格切件错缝拼板预览</h3>
+            <p class="hint">从已核销为「合格」的原板中勾选 1～10 件切件（以板号＋切件序号标识），按等宽木条、接头无长度损耗且不裁短计算：每行从左至右拼到目标行长（行内切件长度之和恰等于目标行长），每件最多用一次，允许余件。接缝位置为除末件外的累计长度；相邻行任意两接缝位置差的绝对值须不小于最小错缝距离，无接缝行不限制邻行。精确求用件数最少的排布，并列时逐行取切件标识（先板号后切件号）字典序最小者。本预览为只读，不修改批次。</p>
+            <div class="field-grid">
+              <label class="field">
+                <span>目标行长（正整数）</span>
+                <input type="number" id="jointTarget" min="1" step="1" value="6000" inputmode="numeric" />
+              </label>
+              <label class="field">
+                <span>行数（2～4）</span>
+                <input type="number" id="jointRows" min="2" max="4" step="1" value="2" inputmode="numeric" />
+              </label>
+              <label class="field">
+                <span>最小错缝距离（非负整数）</span>
+                <input type="number" id="jointStagger" min="0" step="1" value="0" inputmode="numeric" />
+              </label>
+            </div>
+            <h4 class="subsection-title">拼板选件（勾选 1～10 件合格切件）</h4>
+            <div id="jointPickList" class="joint-pick-list"></div>
+            <button type="button" id="jointBtn" class="btn btn-primary">生成错缝拼板预览</button>
+            <div id="jointError" class="alert alert-error" role="alert" hidden></div>
+            <div id="jointWarn" class="alert alert-warn" role="alert" hidden></div>
+            <div id="jointResult" hidden>
+              <div id="jointSummary" class="summary-grid"></div>
+
+              <h4 class="subsection-title">逐行排布</h4>
+              <div id="jointRowList" class="joint-row-list"></div>
+
+              <h4 class="subsection-title">未用切件</h4>
+              <div id="jointUnused" class="qualified-list"></div>
+            </div>
+          </div>
+
+          <div id="reportOk" class="alert alert-ok" role="status" hidden></div>
+          <div id="reportError" class="alert alert-error" role="alert" hidden></div>
+        </div>
+
+        <div id="noSolution" class="alert alert-warn" role="alert" hidden></div>
+      </section>
+    </main>
+
+    <footer class="site-footer">
+      <span>一维排料（Bin Packing）精确求解 · 锯机作业精确排程 · Shapley 费用分摊 · 批次执行核销、实测尺寸复核与合格切件错缝拼板预览（SQLite 持久化） · Flask + 原生 JavaScript</span>
+    </footer>
+  </div>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>
