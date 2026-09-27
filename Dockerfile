@@ -9,7 +9,7 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-COPY app.py optimizer.py allocate.py schedule.py batches.py quality.py joint.py ./
+COPY app.py optimizer.py allocate.py schedule.py batches.py quality.py joint.py dispatches.py ./
 COPY static ./static
 
 EXPOSE 8000

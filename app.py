@@ -5,12 +5,14 @@
      POST /api/allocate                接收多订单合板需求，返回 Shapley 费用分摊
      POST /api/schedule                接收单份清单与锯机参数，返回最优裁切与锯机排程
      POST /api/batches                 求解并冻结核销批次（无解不建批次）
-     GET  /api/batches/{id}            返回批次快照、版本与逐板状态
+     GET  /api/batches/{id}            返回批次快照、版本与逐板状态（含已发料切件）
      POST /api/batches/{id}/reports    幂等上报逐板核销结果，原子更新并递增版本
      POST /api/batches/{id}/quality-preview
                                        实测尺寸复核（只读，不修改批次）
      POST /api/batches/{id}/joint-preview
                                        合格切件错缝拼板预览（只读，不修改批次）
+     POST /api/dispatches              跨批次合格切件发料单（一笔事务冻结，幂等）
+     GET  /api/dispatches/{id}         返回持久化的发料单明细
 """
 
 import os
@@ -28,6 +30,7 @@ from batches import (
     quality_preview,
     report_batch,
 )
+from dispatches import create_dispatch, get_dispatch
 from optimizer import ValidationError, optimize
 from schedule import schedule
 
@@ -258,13 +261,45 @@ def preview_batch_joint(batch_id):
             min_stagger=data.get("min_stagger"),
         )
     except ValidationError as exc:
-        # 参数非法、选件重复、板号不属于批次或非合格、切件越界等：400。
+        # 参数非法、选件重复、板号不属于批次或非合格、切件越界或已发料等：400。
         return jsonify({"error": str(exc)}), 400
     except NotFoundError as exc:
         return jsonify({"error": str(exc)}), 404
 
     # 只读预览：读取冻结切件长度与当前板状态，不修改批次与版本。
     return jsonify(response)
+
+
+@app.post("/api/dispatches")
+def create_dispatch_order():
+    data = request.get_json(silent=True)
+    if not isinstance(data, dict):
+        return jsonify({"error": "请求体必须为 JSON 对象"}), 400
+
+    try:
+        response, created = create_dispatch(
+            idem_key=data.get("idem_key"),
+            purpose=data.get("purpose"),
+            pieces=data.get("pieces"),
+        )
+    except ValidationError as exc:
+        # 载荷不合法（空幂等键/用途、选件数量越界、切件重复、批次不存在、
+        # 板未核销合格、切件序号越界等）：400，整单不写入。
+        return jsonify({"error": str(exc)}), 400
+    except ConflictError as exc:
+        # 同键异载荷、选件含已发料切件：409，整单不写入。
+        return jsonify({"error": str(exc)}), 409
+
+    # 201：新建发料单并冻结切件；200：同键同载荷幂等重试，返回原单。
+    return jsonify(response), 201 if created else 200
+
+
+@app.get("/api/dispatches/<int:dispatch_id>")
+def fetch_dispatch(dispatch_id):
+    dispatch = get_dispatch(dispatch_id)
+    if dispatch is None:
+        return jsonify({"error": f"发料单 {dispatch_id} 不存在"}), 404
+    return jsonify(dispatch)
 
 
 if __name__ == "__main__":

@@ -8,10 +8,13 @@
   var tabSchedule = document.getElementById("tabSchedule");
   var tabMulti = document.getElementById("tabMulti");
   var tabBatch = document.getElementById("tabBatch");
+  var tabDispatch = document.getElementById("tabDispatch");
   var singleModeEl = document.getElementById("singleMode");
   var scheduleModeEl = document.getElementById("scheduleMode");
   var multiModeEl = document.getElementById("multiMode");
   var batchModeEl = document.getElementById("batchMode");
+  var dispatchModeEl = document.getElementById("dispatchMode");
+  var boardSectionEl = document.getElementById("boardSection");
   var partsSectionEl = document.getElementById("partsSection");
 
   var partRowsEl = document.getElementById("partRows");
@@ -86,11 +89,25 @@
   var jointRowListEl = document.getElementById("jointRowList");
   var jointUnusedEl = document.getElementById("jointUnused");
 
+  var dispatchPurposeEl = document.getElementById("dispatchPurpose");
+  var dispatchIdemKeyEl = document.getElementById("dispatchIdemKey");
+  var dispatchPieceRowsEl = document.getElementById("dispatchPieceRows");
+  var addDispatchPieceBtn = document.getElementById("addDispatchPiece");
+  var dispatchBtn = document.getElementById("dispatchBtn");
+  var openDispatchIdEl = document.getElementById("openDispatchId");
+  var openDispatchBtn = document.getElementById("openDispatchBtn");
+  var dispatchResultEl = document.getElementById("dispatchResult");
+  var dispatchSummaryEl = document.getElementById("dispatchSummary");
+  var dispatchRowsEl = document.getElementById("dispatchRows");
+  var dispatchOkEl = document.getElementById("dispatchOk");
+  var dispatchErrorEl = document.getElementById("dispatchError");
+
   var PLACEHOLDER = {
     single: "填写左侧信息后点击「计算最优方案」，这里会列出逐板切件、锯缝、余料与合计价格。",
     schedule: "填写左侧零件与锯机信息后点击「计算最优排程」，这里会列出各机逐板开工/完工分钟与整体完工分钟。",
     multi: "填写左侧订单后点击「计算费用分摊」，这里会列出合板最优总价、各单精确分摊值与最终应付金额。",
     batch: "在左侧创建或按 ID 打开核销批次后，这里会显示冻结方案、逐板状态、各长度合格件数与核销进度。",
+    dispatch: "在左侧填写用途、幂等键与 1～10 件切件后点击「提交发料单」，这里会列出发料单号、冻结的切件明细与创建时间。",
   };
 
   var TITLES = {
@@ -98,6 +115,7 @@
     schedule: "锯机排程",
     multi: "费用分摊",
     batch: "执行核销",
+    dispatch: "发料单",
   };
 
   /* ---------- 模式切换 ---------- */
@@ -110,12 +128,19 @@
     tabSchedule.classList.toggle("active", mode === "schedule");
     tabMulti.classList.toggle("active", mode === "multi");
     tabBatch.classList.toggle("active", mode === "batch");
-    // 零件清单由「单份清单」「锯机排程」「执行核销」共用，多订单模式下隐藏。
-    partsSectionEl.hidden = mode === "multi";
+    tabDispatch.classList.toggle("active", mode === "dispatch");
+    // 零件清单由「单份清单」「锯机排程」「执行核销」共用，多订单与发料单模式下隐藏；
+    // 原板信息在发料单模式下同样不需要。
+    partsSectionEl.hidden = mode === "multi" || mode === "dispatch";
+    boardSectionEl.hidden = mode === "dispatch";
     singleModeEl.hidden = mode !== "single";
     scheduleModeEl.hidden = mode !== "schedule";
     multiModeEl.hidden = mode !== "multi";
     batchModeEl.hidden = mode !== "batch";
+    dispatchModeEl.hidden = mode !== "dispatch";
+    if (mode === "dispatch" && !dispatchIdemKeyEl.value.trim()) {
+      dispatchIdemKeyEl.value = newDispatchIdemKey();
+    }
     resultTitleEl.textContent = TITLES[mode];
     placeholderEl.textContent = PLACEHOLDER[mode];
     hideMessages();
@@ -132,6 +157,9 @@
   });
   tabBatch.addEventListener("click", function () {
     setMode("batch");
+  });
+  tabDispatch.addEventListener("click", function () {
+    setMode("dispatch");
   });
 
   /* ---------- 零件行 ---------- */
@@ -489,6 +517,11 @@
     scheduleResultEl.hidden = true;
     allocResultEl.hidden = true;
     batchResultEl.hidden = true;
+    dispatchResultEl.hidden = true;
+    dispatchOkEl.hidden = true;
+    dispatchOkEl.textContent = "";
+    dispatchErrorEl.hidden = true;
+    dispatchErrorEl.textContent = "";
     placeholderEl.hidden = false;
   }
 
@@ -833,11 +866,20 @@
 
   function renderBatchBoard(board, boardLength) {
     var card = renderBoard(board, boardLength);
+    var dispatchedCuts = board.dispatched_cuts || [];
 
     var badge = document.createElement("span");
     badge.className = "status-badge st-" + board.status;
     badge.textContent = STATUS_LABELS[board.status] || board.status;
     card.querySelector(".board-head").appendChild(badge);
+
+    // 已发料切件标注：板头徽标 + 逐切件标记。
+    if (dispatchedCuts.length) {
+      var dBadge = document.createElement("span");
+      dBadge.className = "status-badge st-dispatched";
+      dBadge.textContent = "已发料 " + dispatchedCuts.length + " 件";
+      card.querySelector(".board-head").appendChild(dBadge);
+    }
 
     // 待加工板附核销选择：暂不核销 / 合格 / 报废。
     if (board.status === "pending") {
@@ -876,11 +918,14 @@
       var grid = document.createElement("div");
       grid.className = "measure-grid";
       board.cuts.forEach(function (planned, cutIdx) {
+        var dispatched = dispatchedCuts.indexOf(cutIdx + 1) !== -1;
         var cell = document.createElement("label");
-        cell.className = "measure-cell";
+        cell.className = "measure-cell" + (dispatched ? " dispatched" : "");
         var tag = document.createElement("span");
         tag.className = "measure-tag";
-        tag.textContent = "切件 " + (cutIdx + 1) + " · 计划 " + planned;
+        tag.textContent =
+          "切件 " + (cutIdx + 1) + " · 计划 " + planned +
+          (dispatched ? " · 已发料" : "");
         var input = document.createElement("input");
         input.type = "number";
         input.min = "1";
@@ -889,6 +934,11 @@
         input.className = "measure-input";
         input.setAttribute("data-cut-no", String(cutIdx + 1));
         input.setAttribute("data-planned", String(planned));
+        if (dispatched) {
+          // 已发料切件不参与实测录入。
+          input.disabled = true;
+          input.placeholder = "已发料";
+        }
         cell.appendChild(tag);
         cell.appendChild(input);
         grid.appendChild(cell);
@@ -904,8 +954,10 @@
     currentBatchBoards = data.boards;
 
     var counts = { pending: 0, qualified: 0, scrapped: 0 };
+    var dispatchedTotal = 0;
     data.boards.forEach(function (board) {
       counts[board.status] = (counts[board.status] || 0) + 1;
+      dispatchedTotal += (board.dispatched_cuts || []).length;
     });
 
     batchSummaryEl.innerHTML = "";
@@ -914,6 +966,7 @@
     batchSummaryEl.appendChild(stat("待加工", counts.pending + " 板"));
     batchSummaryEl.appendChild(stat("合格", counts.qualified + " 板"));
     batchSummaryEl.appendChild(stat("报废", counts.scrapped + " 板"));
+    batchSummaryEl.appendChild(stat("已发料切件", dispatchedTotal + " 件"));
     batchSummaryEl.appendChild(
       stat("使用原板", data.summary.board_count + " / " + data.summary.available + " 根")
     );
@@ -1263,11 +1316,12 @@
     jointResultEl.hidden = true;
   }
 
-  // 选件勾选区：按合格板逐件列出切件复选框。
+  // 选件勾选区：按合格板逐件列出切件复选框；已发料切件禁用并标注。
   function renderJointPicks(boards) {
     jointPickListEl.innerHTML = "";
     boards.forEach(function (board) {
       if (board.status !== "qualified") return;
+      var dispatchedCuts = board.dispatched_cuts || [];
       var row = document.createElement("div");
       row.className = "joint-pick-board";
       var tag = document.createElement("span");
@@ -1275,13 +1329,18 @@
       tag.textContent = "板 " + board.board_no;
       row.appendChild(tag);
       board.cuts.forEach(function (len, cutIdx) {
+        var dispatched = dispatchedCuts.indexOf(cutIdx + 1) !== -1;
         var label = document.createElement("label");
-        label.className = "joint-pick";
+        label.className = "joint-pick" + (dispatched ? " dispatched" : "");
         var box = document.createElement("input");
         box.type = "checkbox";
         box.className = "joint-pick-box";
         box.setAttribute("data-board-no", String(board.board_no));
         box.setAttribute("data-cut-no", String(cutIdx + 1));
+        if (dispatched) {
+          box.disabled = true;
+          label.title = "该切件已发料，不能参与拼板";
+        }
         box.addEventListener("change", function () {
           var checked = jointPickListEl.querySelectorAll(".joint-pick-box:checked");
           if (checked.length > 10) {
@@ -1293,7 +1352,10 @@
         });
         label.appendChild(box);
         label.appendChild(
-          document.createTextNode(" 件 " + (cutIdx + 1) + " · 长 " + len)
+          document.createTextNode(
+            " 件 " + (cutIdx + 1) + " · 长 " + len +
+            (dispatched ? " · 已发料" : "")
+          )
         );
         row.appendChild(label);
       });
@@ -1458,6 +1520,236 @@
       });
   });
 
+  /* ---------- 跨批次合格切件发料单 ---------- */
+
+  function newDispatchIdemKey() {
+    return (
+      "dsp-" + Date.now().toString(36) + "-" +
+      Math.random().toString(36).slice(2, 8)
+    );
+  }
+
+  function showDispatchError(msg) {
+    dispatchErrorEl.textContent = msg;
+    dispatchErrorEl.hidden = false;
+    dispatchOkEl.hidden = true;
+  }
+
+  function showDispatchOk(msg) {
+    dispatchOkEl.textContent = msg;
+    dispatchOkEl.hidden = false;
+    dispatchErrorEl.hidden = true;
+  }
+
+  function renumberDispatchPieces() {
+    var rows = dispatchPieceRowsEl.querySelectorAll(".dispatch-row");
+    rows.forEach(function (row, i) {
+      row.querySelector(".idx").textContent = String(i + 1);
+      // 至少保留一行时，唯一一行禁用删除；达到 10 件时禁用添加。
+      row.querySelector(".btn-del").disabled = rows.length <= 1;
+    });
+    addDispatchPieceBtn.disabled = rows.length >= 10;
+  }
+
+  function makeDispatchPieceRow(batchId, boardNo, cutNo) {
+    var row = document.createElement("div");
+    row.className = "parts-row dispatch-row";
+    row.innerHTML =
+      '<span class="idx"></span>' +
+      '<input class="dp-batch" type="number" min="1" step="1" inputmode="numeric" placeholder="批次 ID" />' +
+      '<input class="dp-board" type="number" min="1" step="1" inputmode="numeric" placeholder="板号" />' +
+      '<input class="dp-cut" type="number" min="1" step="1" inputmode="numeric" placeholder="切件序号" />' +
+      '<button type="button" class="btn-del">删除</button>';
+    row.querySelector(".dp-batch").value = batchId != null ? batchId : "";
+    row.querySelector(".dp-board").value = boardNo != null ? boardNo : "";
+    row.querySelector(".dp-cut").value = cutNo != null ? cutNo : "";
+    row.querySelector(".btn-del").addEventListener("click", function () {
+      if (dispatchPieceRowsEl.querySelectorAll(".dispatch-row").length > 1) {
+        row.remove();
+        renumberDispatchPieces();
+      }
+    });
+    dispatchPieceRowsEl.appendChild(row);
+    renumberDispatchPieces();
+  }
+
+  addDispatchPieceBtn.addEventListener("click", function () {
+    if (dispatchPieceRowsEl.querySelectorAll(".dispatch-row").length < 10) {
+      makeDispatchPieceRow();
+    }
+  });
+
+  // 预置一行空切件
+  makeDispatchPieceRow();
+
+  function collectDispatchPieces() {
+    var rows = dispatchPieceRowsEl.querySelectorAll(".dispatch-row");
+    if (rows.length < 1 || rows.length > 10) {
+      return { error: "切件数量须为 1～10 件" };
+    }
+    var pieces = [];
+    var seen = {};
+    for (var i = 0; i < rows.length; i++) {
+      var label = "第 " + (i + 1) + " 件切件的";
+      var batchRes = readPositiveInt(
+        rows[i].querySelector(".dp-batch"), label + "批次 ID"
+      );
+      if (batchRes.error) return { error: batchRes.error };
+      var boardRes = readPositiveInt(
+        rows[i].querySelector(".dp-board"), label + "板号"
+      );
+      if (boardRes.error) return { error: boardRes.error };
+      var cutRes = readPositiveInt(
+        rows[i].querySelector(".dp-cut"), label + "切件序号"
+      );
+      if (cutRes.error) return { error: cutRes.error };
+
+      var dupKey = batchRes.value + "-" + boardRes.value + "-" + cutRes.value;
+      if (seen[dupKey]) {
+        return {
+          error:
+            "第 " + (i + 1) + " 件切件（批次 " + batchRes.value +
+            " 板 " + boardRes.value + " 切件 " + cutRes.value + "）与前面重复",
+        };
+      }
+      seen[dupKey] = true;
+      pieces.push({
+        batch_id: batchRes.value,
+        board_no: boardRes.value,
+        cut_no: cutRes.value,
+      });
+    }
+    return { pieces: pieces };
+  }
+
+  function renderDispatchView(data) {
+    dispatchSummaryEl.innerHTML = "";
+    dispatchSummaryEl.appendChild(stat("发料单号", "#" + data.dispatch_id, true));
+    dispatchSummaryEl.appendChild(stat("用途", data.purpose));
+    dispatchSummaryEl.appendChild(stat("切件数", data.piece_count + " 件"));
+    dispatchSummaryEl.appendChild(stat("幂等键", data.idem_key));
+    dispatchSummaryEl.appendChild(stat("创建时间", data.created_at));
+
+    dispatchRowsEl.innerHTML = "";
+    data.pieces.forEach(function (piece) {
+      var tr = document.createElement("tr");
+      [piece.batch_id, piece.board_no, piece.cut_no, piece.length].forEach(
+        function (text) {
+          var td = document.createElement("td");
+          td.textContent = String(text);
+          tr.appendChild(td);
+        }
+      );
+      dispatchRowsEl.appendChild(tr);
+    });
+
+    placeholderEl.hidden = true;
+    dispatchResultEl.hidden = false;
+  }
+
+  dispatchBtn.addEventListener("click", function () {
+    dispatchErrorEl.hidden = true;
+    dispatchOkEl.hidden = true;
+    document.querySelectorAll("#dispatchPieceRows input.invalid").forEach(
+      function (el) {
+        el.classList.remove("invalid");
+      }
+    );
+
+    var purpose = dispatchPurposeEl.value.trim();
+    if (!purpose) {
+      dispatchPurposeEl.classList.add("invalid");
+      showDispatchError("用途不能为空");
+      return;
+    }
+    dispatchPurposeEl.classList.remove("invalid");
+
+    var key = dispatchIdemKeyEl.value.trim();
+    if (!key) {
+      dispatchIdemKeyEl.classList.add("invalid");
+      showDispatchError("幂等键不能为空");
+      return;
+    }
+    dispatchIdemKeyEl.classList.remove("invalid");
+
+    var collected = collectDispatchPieces();
+    if (collected.error) {
+      showDispatchError(collected.error);
+      return;
+    }
+
+    dispatchBtn.disabled = true;
+    dispatchBtn.textContent = "提交中…";
+
+    postJson("/api/dispatches", {
+      idem_key: key,
+      purpose: purpose,
+      pieces: collected.pieces,
+    })
+      .then(function (r) {
+        if (!r.ok) {
+          // 400/409：整单未写入，保留幂等键便于修正或重试。
+          showDispatchError(r.body.error || "服务器未能处理该请求");
+          return;
+        }
+        renderDispatchView(r.body);
+        if (r.status === 201) {
+          showDispatchOk(
+            "发料单已创建：#" + r.body.dispatch_id + "，共 " +
+            r.body.piece_count + " 件；切件长度与归属已冻结，不得再发料。"
+          );
+        } else {
+          showDispatchOk(
+            "同一幂等键与载荷的重试：返回原发料单 #" + r.body.dispatch_id +
+            "，共 " + r.body.piece_count + " 件。"
+          );
+        }
+        // 成功后更换幂等键，下一次提交视为新的逻辑操作。
+        dispatchIdemKeyEl.value = newDispatchIdemKey();
+      })
+      .catch(function () {
+        // 网络失败时保留幂等键，重试仍为同一逻辑操作。
+        showDispatchError("网络错误，请确认服务已启动后重试");
+      })
+      .finally(function () {
+        dispatchBtn.disabled = false;
+        dispatchBtn.textContent = "提交发料单";
+      });
+  });
+
+  openDispatchBtn.addEventListener("click", function () {
+    var raw = openDispatchIdEl.value.trim();
+    if (!/^\d+$/.test(raw) || Number(raw) <= 0) {
+      openDispatchIdEl.classList.add("invalid");
+      showDispatchError("发料单 ID 必须为正整数");
+      return;
+    }
+    openDispatchIdEl.classList.remove("invalid");
+    dispatchErrorEl.hidden = true;
+    dispatchOkEl.hidden = true;
+
+    openDispatchBtn.disabled = true;
+    fetch("/api/dispatches/" + raw)
+      .then(function (resp) {
+        return resp.json().then(function (body) {
+          return { ok: resp.ok, body: body };
+        });
+      })
+      .then(function (r) {
+        if (!r.ok) {
+          showDispatchError(r.body.error || "发料单不存在");
+          return;
+        }
+        renderDispatchView(r.body);
+      })
+      .catch(function () {
+        showDispatchError("网络错误，请确认服务已启动后重试");
+      })
+      .finally(function () {
+        openDispatchBtn.disabled = false;
+      });
+  });
+
   /* ---------- 提交 ---------- */
 
   function postJson(url, payload) {
@@ -1467,7 +1759,7 @@
       body: JSON.stringify(payload),
     }).then(function (resp) {
       return resp.json().then(function (body) {
-        return { ok: resp.ok, body: body };
+        return { ok: resp.ok, status: resp.status, body: body };
       });
     });
   }

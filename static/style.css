@@ -410,6 +410,12 @@ body {
   color: var(--error-ink);
 }
 
+.status-badge.st-dispatched {
+  background: var(--warn-bg);
+  border-color: var(--warn-line);
+  color: var(--warn-ink);
+}
+
 .report-choices {
   display: flex;
   gap: 16px;
@@ -699,6 +705,17 @@ body {
   background: var(--error-bg);
 }
 
+.measure-input:disabled {
+  background: #f1eee6;
+  color: var(--ink-soft);
+  cursor: not-allowed;
+}
+
+.measure-cell.dispatched .measure-tag {
+  color: var(--warn-ink);
+  font-weight: 600;
+}
+
 .subsection-title {
   margin: 16px 0 8px;
   font-size: 14px;
@@ -767,6 +784,26 @@ body {
 .joint-pick input[type="checkbox"] {
   accent-color: var(--brand);
   cursor: pointer;
+}
+
+.joint-pick.dispatched {
+  background: var(--warn-bg);
+  border-color: var(--warn-line);
+  color: var(--warn-ink);
+  cursor: not-allowed;
+}
+
+.joint-pick.dispatched input[type="checkbox"] {
+  cursor: not-allowed;
+}
+
+/* 发料单切件录入行：序号 / 批次 / 板号 / 切件序号 / 操作 */
+.dispatch-row {
+  grid-template-columns: 40px 1fr 1fr 1fr 56px;
+}
+
+.dispatch-table {
+  margin-bottom: 6px;
 }
 
 .joint-row-list {
