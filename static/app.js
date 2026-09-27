@@ -86,11 +86,29 @@
   var jointRowListEl = document.getElementById("jointRowList");
   var jointUnusedEl = document.getElementById("jointUnused");
 
+  var tabDispatch = document.getElementById("tabDispatch");
+  var dispatchModeEl = document.getElementById("dispatchMode");
+  var dispatchPurposeEl = document.getElementById("dispatchPurpose");
+  var dispatchIdemEl = document.getElementById("dispatchIdem");
+  var dispatchPieceRowsEl = document.getElementById("dispatchPieceRows");
+  var addDispatchPieceBtn = document.getElementById("addDispatchPiece");
+  var dispatchCreateBtn = document.getElementById("dispatchCreateBtn");
+  var dispatchFormAlertEl = document.getElementById("dispatchFormAlert");
+  var openDispatchIdEl = document.getElementById("openDispatchId");
+  var openDispatchBtn = document.getElementById("openDispatchBtn");
+  var dispatchResultEl = document.getElementById("dispatchResult");
+  var dispatchSummaryEl = document.getElementById("dispatchSummary");
+  var dispatchMetaEl = document.getElementById("dispatchMeta");
+  var dispatchPieceListEl = document.getElementById("dispatchPieceList");
+  var dispatchOkEl = document.getElementById("dispatchOk");
+  var dispatchErrorEl = document.getElementById("dispatchError");
+
   var PLACEHOLDER = {
     single: "填写左侧信息后点击「计算最优方案」，这里会列出逐板切件、锯缝、余料与合计价格。",
     schedule: "填写左侧零件与锯机信息后点击「计算最优排程」，这里会列出各机逐板开工/完工分钟与整体完工分钟。",
     multi: "填写左侧订单后点击「计算费用分摊」，这里会列出合板最优总价、各单精确分摊值与最终应付金额。",
     batch: "在左侧创建或按 ID 打开核销批次后，这里会显示冻结方案、逐板状态、各长度合格件数与核销进度。",
+    dispatch: "在左侧填写用途、幂等键并收集 1～10 件跨批次合格切件后，这里会显示持久化发料单明细。",
   };
 
   var TITLES = {
@@ -98,6 +116,7 @@
     schedule: "锯机排程",
     multi: "费用分摊",
     batch: "执行核销",
+    dispatch: "跨批次合格切件发料",
   };
 
   /* ---------- 模式切换 ---------- */
@@ -110,12 +129,14 @@
     tabSchedule.classList.toggle("active", mode === "schedule");
     tabMulti.classList.toggle("active", mode === "multi");
     tabBatch.classList.toggle("active", mode === "batch");
-    // 零件清单由「单份清单」「锯机排程」「执行核销」共用，多订单模式下隐藏。
-    partsSectionEl.hidden = mode === "multi";
+    tabDispatch.classList.toggle("active", mode === "dispatch");
+    // 零件清单由「单份清单」「锯机排程」「执行核销」共用，多订单/发料模式下隐藏。
+    partsSectionEl.hidden = mode === "multi" || mode === "dispatch";
     singleModeEl.hidden = mode !== "single";
     scheduleModeEl.hidden = mode !== "schedule";
     multiModeEl.hidden = mode !== "multi";
     batchModeEl.hidden = mode !== "batch";
+    dispatchModeEl.hidden = mode !== "dispatch";
     resultTitleEl.textContent = TITLES[mode];
     placeholderEl.textContent = PLACEHOLDER[mode];
     hideMessages();
@@ -132,6 +153,9 @@
   });
   tabBatch.addEventListener("click", function () {
     setMode("batch");
+  });
+  tabDispatch.addEventListener("click", function () {
+    setMode("dispatch");
   });
 
   /* ---------- 零件行 ---------- */
@@ -489,6 +513,7 @@
     scheduleResultEl.hidden = true;
     allocResultEl.hidden = true;
     batchResultEl.hidden = true;
+    dispatchResultEl.hidden = true;
     placeholderEl.hidden = false;
   }
 
@@ -864,6 +889,29 @@
 
     // 合格板逐切件录入实测长度；留空的切件不参与复核。
     if (board.status === "qualified") {
+      // 已发料切件：在逐件尺寸标签上标注，并提供未发料切件的「＋发料」快捷入口。
+      var dispatchedNos = {};
+      (board.dispatched_cuts || []).forEach(function (c) {
+        dispatchedNos[c.cut_no] = c.dispatch_id;
+      });
+      var cutChips = card.querySelectorAll(".cut-list .chip");
+      cutChips.forEach(function (chip, cutIdx) {
+        var cutNo = cutIdx + 1;
+        if (dispatchedNos[cutNo] != null) {
+          chip.classList.add("chip-dispatched");
+          chip.title = "已发料（发料单 #" + dispatchedNos[cutNo] + "），不可再次发料";
+          chip.textContent = board.cuts[cutIdx] + " · 已发料 #" + dispatchedNos[cutNo];
+        } else {
+          chip.classList.add("chip-dispatchable");
+          chip.title = "加入跨批次发料单";
+          chip.textContent = board.cuts[cutIdx] + " ＋发料";
+          chip.addEventListener("click", function () {
+            addDispatchPiece(board, cutNo);
+            setMode("dispatch");
+          });
+        }
+      });
+
       var measure = document.createElement("div");
       measure.className = "measure-block";
       measure.setAttribute("data-board-no", String(board.board_no));
@@ -904,8 +952,10 @@
     currentBatchBoards = data.boards;
 
     var counts = { pending: 0, qualified: 0, scrapped: 0 };
+    var dispatchedCount = 0;
     data.boards.forEach(function (board) {
       counts[board.status] = (counts[board.status] || 0) + 1;
+      dispatchedCount += (board.dispatched_cuts || []).length;
     });
 
     batchSummaryEl.innerHTML = "";
@@ -914,6 +964,7 @@
     batchSummaryEl.appendChild(stat("待加工", counts.pending + " 板"));
     batchSummaryEl.appendChild(stat("合格", counts.qualified + " 板"));
     batchSummaryEl.appendChild(stat("报废", counts.scrapped + " 板"));
+    batchSummaryEl.appendChild(stat("已发料切件", dispatchedCount + " 件"));
     batchSummaryEl.appendChild(
       stat("使用原板", data.summary.board_count + " / " + data.summary.available + " 根")
     );
@@ -1263,11 +1314,15 @@
     jointResultEl.hidden = true;
   }
 
-  // 选件勾选区：按合格板逐件列出切件复选框。
+  // 选件勾选区：按合格板逐件列出切件复选框；已发料切件禁用并标注。
   function renderJointPicks(boards) {
     jointPickListEl.innerHTML = "";
     boards.forEach(function (board) {
       if (board.status !== "qualified") return;
+      var dispatchedNos = {};
+      (board.dispatched_cuts || []).forEach(function (c) {
+        dispatchedNos[c.cut_no] = c.dispatch_id;
+      });
       var row = document.createElement("div");
       row.className = "joint-pick-board";
       var tag = document.createElement("span");
@@ -1275,13 +1330,20 @@
       tag.textContent = "板 " + board.board_no;
       row.appendChild(tag);
       board.cuts.forEach(function (len, cutIdx) {
+        var cutNo = cutIdx + 1;
+        var dispatchId = dispatchedNos[cutNo];
         var label = document.createElement("label");
-        label.className = "joint-pick";
+        label.className = "joint-pick" + (dispatchId != null ? " picked-dispatched" : "");
         var box = document.createElement("input");
         box.type = "checkbox";
         box.className = "joint-pick-box";
         box.setAttribute("data-board-no", String(board.board_no));
-        box.setAttribute("data-cut-no", String(cutIdx + 1));
+        box.setAttribute("data-cut-no", String(cutNo));
+        if (dispatchId != null) {
+          // 已发料切件：拼板预览拒绝，勾选区禁用并标注发料单号。
+          box.disabled = true;
+          label.title = "已发料（发料单 #" + dispatchId + "），不可参与拼板";
+        }
         box.addEventListener("change", function () {
           var checked = jointPickListEl.querySelectorAll(".joint-pick-box:checked");
           if (checked.length > 10) {
@@ -1293,7 +1355,10 @@
         });
         label.appendChild(box);
         label.appendChild(
-          document.createTextNode(" 件 " + (cutIdx + 1) + " · 长 " + len)
+          document.createTextNode(
+            " 件 " + cutNo + " · 长 " + len +
+            (dispatchId != null ? " · 已发料 #" + dispatchId : "")
+          )
         );
         row.appendChild(label);
       });
@@ -1458,6 +1523,288 @@
       });
   });
 
+  /* ---------- 跨批次合格切件发料 ---------- */
+
+  function newDispatchIdemKey() {
+    return (
+      "dsp-" + Date.now().toString(36) + "-" +
+      Math.random().toString(36).slice(2, 8)
+    );
+  }
+
+  function renumberDispatchPieces() {
+    var rows = dispatchPieceRowsEl.querySelectorAll(".dispatch-piece-row");
+    rows.forEach(function (row, i) {
+      row.querySelector(".idx").textContent = String(i + 1);
+      row.querySelector(".btn-del").disabled = rows.length <= 1;
+    });
+    addDispatchPieceBtn.disabled = rows.length >= 10;
+  }
+
+  function makeDispatchPieceRow(batchId, boardNo, cutNo) {
+    var row = document.createElement("div");
+    row.className = "parts-row dispatch-piece-row";
+    row.innerHTML =
+      '<span class="idx"></span>' +
+      '<input class="dp-batch" type="number" min="1" step="1" inputmode="numeric" placeholder="批次 ID" />' +
+      '<input class="dp-board" type="number" min="1" step="1" inputmode="numeric" placeholder="板号" />' +
+      '<input class="dp-cut" type="number" min="1" step="1" inputmode="numeric" placeholder="切件号" />' +
+      '<button type="button" class="btn-del">删除</button>';
+    if (batchId != null) row.querySelector(".dp-batch").value = String(batchId);
+    if (boardNo != null) row.querySelector(".dp-board").value = String(boardNo);
+    if (cutNo != null) row.querySelector(".dp-cut").value = String(cutNo);
+    row.querySelector(".btn-del").addEventListener("click", function () {
+      if (dispatchPieceRowsEl.querySelectorAll(".dispatch-piece-row").length > 1) {
+        row.remove();
+        renumberDispatchPieces();
+      }
+    });
+    dispatchPieceRowsEl.appendChild(row);
+    renumberDispatchPieces();
+    return row;
+  }
+
+  addDispatchPieceBtn.addEventListener("click", function () {
+    if (dispatchPieceRowsEl.querySelectorAll(".dispatch-piece-row").length < 10) {
+      makeDispatchPieceRow();
+    }
+  });
+
+  // 从批次详情的合格切件标签快速加入：已存在或已达 10 件时在表单内提示。
+  function showDispatchFormAlert(msg) {
+    dispatchFormAlertEl.textContent = msg;
+    dispatchFormAlertEl.hidden = false;
+  }
+
+  function addDispatchPiece(board, cutNo) {
+    if (currentBatchId == null) return;
+    dispatchFormAlertEl.hidden = true;
+    var dup = false;
+    dispatchPieceRowsEl.querySelectorAll(".dispatch-piece-row").forEach(function (row) {
+      if (
+        row.querySelector(".dp-batch").value === String(currentBatchId) &&
+        row.querySelector(".dp-board").value === String(board.board_no) &&
+        row.querySelector(".dp-cut").value === String(cutNo)
+      ) {
+        dup = true;
+      }
+    });
+    if (dup) {
+      showDispatchFormAlert(
+        "批次 " + currentBatchId + " 板 " + board.board_no +
+        " 切件 " + cutNo + " 已在发料选件中"
+      );
+      return;
+    }
+    var count = dispatchPieceRowsEl.querySelectorAll(".dispatch-piece-row").length;
+    var target = count >= 10 ? null : makeDispatchPieceRow(currentBatchId, board.board_no, cutNo);
+    if (!target) {
+      showDispatchFormAlert("一张发料单最多收集 10 件切件");
+      return;
+    }
+    dispatchErrorEl.hidden = true;
+    dispatchOkEl.hidden = true;
+    if (!dispatchIdemEl.value.trim()) {
+      dispatchIdemEl.value = newDispatchIdemKey();
+    }
+  }
+
+  function showDispatchError(msg) {
+    dispatchErrorEl.textContent = msg;
+    dispatchErrorEl.hidden = false;
+    dispatchOkEl.hidden = true;
+  }
+
+  function showDispatchOk(msg) {
+    dispatchOkEl.textContent = msg;
+    dispatchOkEl.hidden = false;
+    dispatchErrorEl.hidden = true;
+  }
+
+  function collectDispatchPayload() {
+    var purpose = dispatchPurposeEl.value.trim();
+    if (!purpose) {
+      dispatchPurposeEl.classList.add("invalid");
+      return { error: "用途不能为空" };
+    }
+    dispatchPurposeEl.classList.remove("invalid");
+    var idem = dispatchIdemEl.value.trim();
+    if (!idem) {
+      dispatchIdemEl.classList.add("invalid");
+      return { error: "幂等键不能为空" };
+    }
+    dispatchIdemEl.classList.remove("invalid");
+
+    var pieces = [];
+    var seen = {};
+    var rows = dispatchPieceRowsEl.querySelectorAll(".dispatch-piece-row");
+    for (var i = 0; i < rows.length; i++) {
+      var bEl = rows[i].querySelector(".dp-batch");
+      var bdEl = rows[i].querySelector(".dp-board");
+      var cEl = rows[i].querySelector(".dp-cut");
+      [bEl, bdEl, cEl].forEach(function (el) { el.classList.remove("invalid"); });
+      var vals = [bEl.value.trim(), bdEl.value.trim(), cEl.value.trim()];
+      if (vals.some(function (v) { return v === ""; })) {
+        [bEl, bdEl, cEl].forEach(function (el) {
+          if (el.value.trim() === "") el.classList.add("invalid");
+        });
+        return { error: "第 " + (i + 1) + " 件切件的批次 ID、板号、切件号均须填写正整数" };
+      }
+      var bad = vals.some(function (v) { return !/^\d+$/.test(v) || Number(v) <= 0; });
+      if (bad) {
+        [bEl, bdEl, cEl].forEach(function (el) {
+          var v = el.value.trim();
+          if (!/^\d+$/.test(v) || Number(v) <= 0) el.classList.add("invalid");
+        });
+        return { error: "第 " + (i + 1) + " 件切件的批次 ID、板号、切件号均须为正整数" };
+      }
+      var piece = {
+        batch_id: Number(vals[0]),
+        board_no: Number(vals[1]),
+        cut_no: Number(vals[2]),
+      };
+      var key = piece.batch_id + "/" + piece.board_no + "/" + piece.cut_no;
+      if (seen[key]) {
+        return { error: "第 " + (i + 1) + " 件切件（" + key + "）在选件中重复" };
+      }
+      seen[key] = true;
+      pieces.push(piece);
+    }
+    if (pieces.length < 1 || pieces.length > 10) {
+      return { error: "一张发料单须收集 1～10 件切件" };
+    }
+    return { payload: { idem_key: idem, purpose: purpose, pieces: pieces } };
+  }
+
+  function renderDispatch(data, replayed) {
+    dispatchSummaryEl.innerHTML = "";
+    dispatchSummaryEl.appendChild(stat("发料单号", "#" + data.dispatch_id, true));
+    dispatchSummaryEl.appendChild(stat("用途", data.purpose));
+    dispatchSummaryEl.appendChild(stat("切件数", data.piece_count + " 件"));
+    dispatchSummaryEl.appendChild(stat("涉及批次", data.batch_count + " 个"));
+    dispatchSummaryEl.appendChild(stat("合计长度", data.total_length));
+
+    dispatchMetaEl.textContent =
+      "幂等键：" + data.idem_key +
+      "　创建时间（UTC）：" + data.created_at;
+
+    dispatchPieceListEl.innerHTML = "";
+    var groups = {};
+    var groupOrder = [];
+    data.pieces.forEach(function (p) {
+      if (groups[p.batch_id] == null) {
+        groups[p.batch_id] = [];
+        groupOrder.push(p.batch_id);
+      }
+      groups[p.batch_id].push(p);
+    });
+    groupOrder.forEach(function (batchId) {
+      var card = document.createElement("div");
+      card.className = "dispatch-group";
+      var head = document.createElement("div");
+      head.className = "dispatch-group-head";
+      head.textContent = "批次 #" + batchId + "（" + groups[batchId].length + " 件）";
+      card.appendChild(head);
+      var chips = document.createElement("div");
+      chips.className = "cut-list";
+      groups[batchId].forEach(function (p) {
+        var chip = document.createElement("span");
+        chip.className = "chip qualified-chip";
+        chip.textContent = "板 " + p.board_no + " 件 " + p.cut_no + " · 长 " + p.length;
+        chips.appendChild(chip);
+      });
+      card.appendChild(chips);
+      dispatchPieceListEl.appendChild(card);
+    });
+
+    placeholderEl.hidden = true;
+    dispatchResultEl.hidden = false;
+    if (replayed) {
+      showDispatchOk("该幂等键已使用且用途与选件集合一致，返回首次生成的发料单 #" + data.dispatch_id + "。");
+    } else {
+      showDispatchOk("发料成功：发料单 #" + data.dispatch_id + " 已持久化，切件长度与归属已冻结，不得再次发料。");
+    }
+  }
+
+  dispatchCreateBtn.addEventListener("click", function () {
+    dispatchErrorEl.hidden = true;
+    dispatchOkEl.hidden = true;
+    dispatchFormAlertEl.hidden = true;
+    var collected = collectDispatchPayload();
+    if (collected.error) {
+      showDispatchFormAlert(collected.error);
+      return;
+    }
+
+    dispatchCreateBtn.disabled = true;
+    dispatchCreateBtn.textContent = "提交中…";
+
+    postJson("/api/dispatches", collected.payload)
+      .then(function (r) {
+        if (!r.ok) {
+          showDispatchError(r.body.error || "服务器未能处理该请求");
+          return;
+        }
+        openDispatchIdEl.value = String(r.body.dispatch_id);
+        renderDispatch(r.body, r.status === 200);
+        // 发料可能改变当前打开批次的已发料标注：若批次页开着则静默刷新。
+        if (currentBatchId != null) {
+          return fetch("/api/batches/" + currentBatchId)
+            .then(function (resp) { return resp.json(); })
+            .then(function (batch) {
+              if (!document.getElementById("tabBatch").classList.contains("active")) return;
+              renderBatchView(batch);
+            })
+            .catch(function () {});
+        }
+      })
+      .catch(function () {
+        showDispatchError("网络错误，请确认服务已启动后重试");
+      })
+      .finally(function () {
+        dispatchCreateBtn.disabled = false;
+        dispatchCreateBtn.textContent = "生成发料单";
+      });
+  });
+
+  openDispatchBtn.addEventListener("click", function () {
+    var raw = openDispatchIdEl.value.trim();
+    if (!/^\d+$/.test(raw) || Number(raw) <= 0) {
+      openDispatchIdEl.classList.add("invalid");
+      showDispatchFormAlert("发料单 ID 必须为正整数");
+      return;
+    }
+    openDispatchIdEl.classList.remove("invalid");
+    dispatchErrorEl.hidden = true;
+    dispatchOkEl.hidden = true;
+    dispatchFormAlertEl.hidden = true;
+
+    openDispatchBtn.disabled = true;
+    fetch("/api/dispatches/" + raw)
+      .then(function (resp) {
+        return resp.json().then(function (body) {
+          return { ok: resp.ok, body: body };
+        });
+      })
+      .then(function (r) {
+        if (!r.ok) {
+          showDispatchError(r.body.error || "发料单不存在");
+          return;
+        }
+        renderDispatch(r.body, false);
+      })
+      .catch(function () {
+        showDispatchError("网络错误，请确认服务已启动后重试");
+      })
+      .finally(function () {
+        openDispatchBtn.disabled = false;
+      });
+  });
+
+  // 预置一行空选件与新的幂等键。
+  makeDispatchPieceRow();
+  dispatchIdemEl.value = newDispatchIdemKey();
+
   /* ---------- 提交 ---------- */
 
   function postJson(url, payload) {
@@ -1467,7 +1814,7 @@
       body: JSON.stringify(payload),
     }).then(function (resp) {
       return resp.json().then(function (body) {
-        return { ok: resp.ok, body: body };
+        return { ok: resp.ok, status: resp.status, body: body };
       });
     });
   }

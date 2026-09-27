@@ -801,6 +801,93 @@ body {
   color: var(--ink-soft);
 }
 
+/* 跨批次发料 */
+.dispatch-piece-title-row {
+  grid-template-columns: 40px 1fr 1fr 1fr 56px;
+}
+
+.dispatch-piece-row {
+  grid-template-columns: 40px 1fr 1fr 1fr 56px;
+}
+
+.dispatch-piece-row .idx {
+  text-align: center;
+  font-size: 13px;
+  color: var(--ink-soft);
+}
+
+.dispatch-piece-row input {
+  width: 100%;
+  padding: 8px 9px;
+  font-size: 14px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fdfcf9;
+}
+
+.dispatch-piece-row input:focus {
+  outline: 2px solid rgba(138, 90, 43, 0.25);
+  border-color: var(--brand);
+}
+
+.dispatch-piece-row input.invalid {
+  border-color: var(--error-line);
+  background: var(--error-bg);
+}
+
+.dispatch-meta {
+  font-size: 13px;
+  color: var(--ink-soft);
+  margin: -6px 0 4px;
+}
+
+.dispatch-piece-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.dispatch-group {
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 12px 14px;
+  background: #fffdf9;
+}
+
+.dispatch-group-head {
+  font-weight: 600;
+  font-size: 14px;
+  color: var(--brand);
+  margin-bottom: 8px;
+}
+
+/* 批次切件标签：可发料 / 已发料 */
+.cut-list .chip.chip-dispatchable {
+  cursor: pointer;
+  background: var(--accent-soft);
+  border-color: #bcdcc7;
+  color: var(--accent);
+}
+
+.cut-list .chip.chip-dispatchable:hover {
+      background: #d7ecde;
+}
+
+.cut-list .chip.chip-dispatched {
+  background: var(--warn-bg);
+  border-color: var(--warn-line);
+  color: var(--warn-ink);
+  cursor: default;
+}
+
+/* 已发料切件的拼板勾选项 */
+.joint-pick.picked-dispatched {
+  opacity: 0.55;
+  cursor: not-allowed;
+  background: var(--warn-bg);
+  border-color: var(--warn-line);
+}
+
 .site-footer {
   margin-top: 26px;
   text-align: center;

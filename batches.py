@@ -57,6 +57,27 @@ CREATE TABLE IF NOT EXISTS reports (
     created_at TEXT NOT NULL DEFAULT (datetime('now')),
     PRIMARY KEY (batch_id, idem_key)
 );
+CREATE TABLE IF NOT EXISTS dispatches (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    idem_key TEXT NOT NULL UNIQUE,
+    purpose TEXT NOT NULL,
+    payload_json TEXT NOT NULL,
+    response_json TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE TABLE IF NOT EXISTS dispatch_items (
+    batch_id INTEGER NOT NULL,
+    board_no INTEGER NOT NULL,
+    cut_no INTEGER NOT NULL,
+    dispatch_id INTEGER NOT NULL REFERENCES dispatches (id),
+    length INTEGER NOT NULL,
+    seq INTEGER NOT NULL,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    PRIMARY KEY (batch_id, board_no, cut_no),
+    FOREIGN KEY (batch_id, board_no) REFERENCES boards (batch_id, board_no)
+);
+CREATE INDEX IF NOT EXISTS idx_dispatch_items_dispatch
+    ON dispatch_items (dispatch_id);
 """
 
 
@@ -108,14 +129,41 @@ def _dumps(obj):
     return json.dumps(obj, ensure_ascii=False)
 
 
-def _boards_with_status(plan_boards, status_by_no):
-    """把冻结方案中的逐板数据与当前核销状态合并。"""
+def _boards_with_status(plan_boards, status_by_no, dispatched_by_no=None):
+    """把冻结方案中的逐板数据与当前核销状态合并。
+
+    ``dispatched_by_no`` 给定时，为每块板附加 ``dispatched_cuts``：
+    该板已冻结发料的切件序号列表（升序），元素为
+    ``{"cut_no", "length", "dispatch_id"}``。
+    """
+    if dispatched_by_no is None:
+        dispatched_by_no = {}
     boards = []
     for board in plan_boards:
         merged = dict(board)
         merged["status"] = status_by_no[board["board_no"]]
+        merged["dispatched_cuts"] = dispatched_by_no.get(board["board_no"], [])
         boards.append(merged)
     return boards
+
+
+def _dispatched_by_board(conn, batch_id):
+    """读取批次内每块板已发料切件（切件序号升序）。"""
+    rows = conn.execute(
+        "SELECT board_no, cut_no, length, dispatch_id FROM dispatch_items "
+        "WHERE batch_id = ? ORDER BY board_no, cut_no",
+        (batch_id,),
+    ).fetchall()
+    dispatched = {}
+    for row in rows:
+        dispatched.setdefault(row["board_no"], []).append(
+            {
+                "cut_no": row["cut_no"],
+                "length": row["length"],
+                "dispatch_id": row["dispatch_id"],
+            }
+        )
+    return dispatched
 
 
 def create_batch(board_length, unit_price, available, parts, kerf):
@@ -178,6 +226,7 @@ def get_batch(batch_id):
             "SELECT board_no, status FROM boards WHERE batch_id = ?",
             (batch_id,),
         ).fetchall()
+        dispatched_by_no = _dispatched_by_board(conn, batch_id)
 
     plan = json.loads(batch["plan_json"])
     status_by_no = {row["board_no"]: row["status"] for row in rows}
@@ -185,7 +234,9 @@ def get_batch(batch_id):
         "batch_id": batch["id"],
         "version": batch["version"],
         "input": json.loads(batch["input_json"]),
-        "boards": _boards_with_status(plan["boards"], status_by_no),
+        "boards": _boards_with_status(
+            plan["boards"], status_by_no, dispatched_by_no
+        ),
         "summary": plan["summary"],
     }
 
@@ -303,6 +354,7 @@ def report_batch(batch_id, idem_key, expected_version, results):
         plan = json.loads(batch["plan_json"])
         for item in normalized:
             status_by_no[item["board_no"]] = item["result"]
+        dispatched_by_no = _dispatched_by_board(conn, batch_id)
         response = {
             "batch_id": batch_id,
             "version": new_version,
@@ -311,7 +363,9 @@ def report_batch(batch_id, idem_key, expected_version, results):
                 for item in normalized
             ],
             "input": json.loads(batch["input_json"]),
-            "boards": _boards_with_status(plan["boards"], status_by_no),
+            "boards": _boards_with_status(
+                plan["boards"], status_by_no, dispatched_by_no
+            ),
             "summary": plan["summary"],
         }
         conn.execute(
@@ -469,13 +523,14 @@ def joint_preview(batch_id, pieces, target_length, row_count, min_stagger):
     """合格切件错缝拼板预览（只读，不修改批次与版本）。
 
     校验选件（1～10 件、(板号, 切件号) 标识、无重复、板属于批次且仍合格、
-    切件序号不越界），读取冻结切件长度后调用 ``joint.plan_joint`` 精确
-    求解错缝拼板排布；无解时返回 ``feasible=False`` 与原因。
+    切件序号不越界、且尚未发料），读取冻结切件长度后调用 ``joint.plan_joint``
+    精确求解错缝拼板排布；无解时返回 ``feasible=False`` 与原因。
 
     抛出
     ----
     ValidationError
-        参数非法、选件重复、板号不属于批次或该板非合格、切件序号越界等。
+        参数非法、选件重复、板号不属于批次或该板非合格、切件序号越界、
+        选件含已发料切件等。
     NotFoundError
         批次不存在。
     """
@@ -515,6 +570,11 @@ def joint_preview(batch_id, pieces, target_length, row_count, min_stagger):
             (batch_id,),
         ).fetchall()
         status_by_no = {row["board_no"]: row["status"] for row in rows}
+        dispatched_rows = conn.execute(
+            "SELECT board_no, cut_no FROM dispatch_items WHERE batch_id = ?",
+            (batch_id,),
+        ).fetchall()
+        dispatched = {(row["board_no"], row["cut_no"]) for row in dispatched_rows}
 
     plan = json.loads(batch["plan_json"])
 
@@ -541,6 +601,11 @@ def joint_preview(batch_id, pieces, target_length, row_count, min_stagger):
             raise ValidationError(
                 f"板号 {board_no} 只有 {cut_count_by_no[board_no]} 个切件，"
                 f"切件序号 {item['cut_no']} 越界"
+            )
+        if (board_no, item["cut_no"]) in dispatched:
+            raise ValidationError(
+                f"板号 {board_no} 切件 {item['cut_no']} 已发料，"
+                "已发料切件不得参与拼板"
             )
         # 切件长度取批次冻结值。
         item["length"] = cut_length_lookup[(board_no, item["cut_no"])]

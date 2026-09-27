@@ -11,6 +11,8 @@
                                        实测尺寸复核（只读，不修改批次）
      POST /api/batches/{id}/joint-preview
                                        合格切件错缝拼板预览（只读，不修改批次）
+     POST /api/dispatches             跨批次合格切件发料（单事务核对、冻结、幂等）
+     GET  /api/dispatches/{id}        返回持久化发料单明细
 """
 
 import os
@@ -28,6 +30,7 @@ from batches import (
     quality_preview,
     report_batch,
 )
+from dispatches import create_dispatch, get_dispatch
 from optimizer import ValidationError, optimize
 from schedule import schedule
 
@@ -265,6 +268,38 @@ def preview_batch_joint(batch_id):
 
     # 只读预览：读取冻结切件长度与当前板状态，不修改批次与版本。
     return jsonify(response)
+
+
+@app.post("/api/dispatches")
+def create_cutting_dispatch():
+    data = request.get_json(silent=True)
+    if not isinstance(data, dict):
+        return jsonify({"error": "请求体必须为 JSON 对象"}), 400
+
+    try:
+        response, created = create_dispatch(
+            idem_key=data.get("idem_key"),
+            purpose=data.get("purpose"),
+            pieces=data.get("pieces"),
+        )
+    except ValidationError as exc:
+        # 载荷非法（空幂等键/用途、选件数量越界、批次不存在、板非合格、
+        # 切件越界、选件重复等）：400，整单不写入。
+        return jsonify({"error": str(exc)}), 400
+    except ConflictError as exc:
+        # 同键异载荷、选件含已发料切件：409，整单不写入。
+        return jsonify({"error": str(exc)}), 409
+
+    # 201：发料单已生成、切件长度与归属已冻结；200：同键同载荷幂等重试返回原单。
+    return jsonify(response), 201 if created else 200
+
+
+@app.get("/api/dispatches/<int:dispatch_id>")
+def fetch_dispatch(dispatch_id):
+    dispatch = get_dispatch(dispatch_id)
+    if dispatch is None:
+        return jsonify({"error": f"发料单 {dispatch_id} 不存在"}), 404
+    return jsonify(dispatch)
 
 
 if __name__ == "__main__":

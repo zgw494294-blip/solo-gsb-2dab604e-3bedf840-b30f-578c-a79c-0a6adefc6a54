@@ -10,7 +10,7 @@
   <div class="page">
     <header class="site-header">
       <h1>木料定尺裁切</h1>
-      <p class="subtitle">输入原板与零件规格，求覆盖全部零件的全局最优方案；支持单份清单精确排料、锯机作业排程、多订单合板费用分摊与裁切执行核销。</p>
+      <p class="subtitle">输入原板与零件规格，求覆盖全部零件的全局最优方案；支持单份清单精确排料、锯机作业排程、多订单合板费用分摊、裁切执行核销与跨批次合格切件发料。</p>
     </header>
 
     <main class="layout">
@@ -21,6 +21,7 @@
           <button type="button" id="tabSchedule" class="tab">锯机排程</button>
           <button type="button" id="tabMulti" class="tab">多订单分摊</button>
           <button type="button" id="tabBatch" class="tab">执行核销</button>
+          <button type="button" id="tabDispatch" class="tab">跨批发料</button>
         </div>
 
         <h2>原板信息</h2>
@@ -110,6 +111,44 @@
             <button type="button" id="openBatchBtn" class="btn btn-ghost">打开批次</button>
           </div>
           <p class="hint">打开已冻结的批次后，可在右侧逐板提交核销结果（合格 / 报废）。</p>
+        </div>
+
+        <!-- 跨批次发料模式 -->
+        <div id="dispatchMode" hidden>
+          <h2>跨批次合格切件发料单</h2>
+          <p class="hint">按批次 ID 收集 1～10 件已核销为「合格」的切件，每件以（批次 ID, 板号, 切件序号）标识；填写非空用途与幂等键后提交。系统在一笔事务中核对全部切件：任一件无效（批次/板/切件不存在、板非合格）或已发料，整单不写入；成功后冻结切件长度与归属，切件不得再次发料。</p>
+
+          <div class="field-grid">
+            <label class="field">
+              <span>用途（非空）</span>
+              <input type="text" id="dispatchPurpose" maxlength="80" placeholder="如：订单 #1234 领料" />
+            </label>
+            <label class="field">
+              <span>幂等键（非空）</span>
+              <input type="text" id="dispatchIdem" maxlength="80" />
+            </label>
+          </div>
+
+          <div class="parts-head">
+            <h2>发料切件（1～10 件，可跨批次）</h2>
+            <button type="button" id="addDispatchPiece" class="btn btn-ghost">＋ 添加切件</button>
+          </div>
+          <div class="parts-table dispatch-piece-table">
+            <div class="parts-row parts-title-row dispatch-piece-title-row">
+              <span>序号</span><span>批次 ID</span><span>板号</span><span>切件号</span><span>操作</span>
+            </div>
+            <div id="dispatchPieceRows"></div>
+          </div>
+          <p class="hint">选件顺序不影响幂等比较；同一幂等键、同一用途与同一选件集合的重试返回原发料单，同键异载荷返回 409。批次页合格切件旁的「＋发料」按钮可快速加入。</p>
+
+          <button type="button" id="dispatchCreateBtn" class="btn btn-primary">生成发料单</button>
+          <div id="dispatchFormAlert" class="alert alert-error" role="alert" hidden></div>
+
+          <h2 class="block-title">按 ID 打开发料单</h2>
+          <div class="open-batch-row">
+            <input type="number" id="openDispatchId" min="1" step="1" placeholder="发料单 ID" inputmode="numeric" />
+            <button type="button" id="openDispatchBtn" class="btn btn-ghost">打开发料单</button>
+          </div>
         </div>
 
         <div id="formError" class="alert alert-error" role="alert" hidden></div>
@@ -250,12 +289,23 @@
           <div id="reportError" class="alert alert-error" role="alert" hidden></div>
         </div>
 
+        <div id="dispatchResult" hidden>
+          <div id="dispatchSummary" class="summary-grid"></div>
+          <div id="dispatchMeta" class="dispatch-meta"></div>
+
+          <h3 class="section-title">发料明细（按批次分组）</h3>
+          <div id="dispatchPieceList" class="dispatch-piece-list"></div>
+
+          <div id="dispatchOk" class="alert alert-ok" role="status" hidden></div>
+          <div id="dispatchError" class="alert alert-error" role="alert" hidden></div>
+        </div>
+
         <div id="noSolution" class="alert alert-warn" role="alert" hidden></div>
       </section>
     </main>
 
     <footer class="site-footer">
-      <span>一维排料（Bin Packing）精确求解 · 锯机作业精确排程 · Shapley 费用分摊 · 批次执行核销、实测尺寸复核与合格切件错缝拼板预览（SQLite 持久化） · Flask + 原生 JavaScript</span>
+      <span>一维排料（Bin Packing）精确求解 · 锯机作业精确排程 · Shapley 费用分摊 · 批次执行核销、实测尺寸复核、合格切件错缝拼板预览与跨批次合格切件发料单（SQLite 持久化） · Flask + 原生 JavaScript</span>
     </footer>
   </div>
 
